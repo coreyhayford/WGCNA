@@ -10,7 +10,7 @@ install.packages("car")
 #loading libraries
 library(rnaseqWrapper) # For Differential Expression analysis and variant analysis
 library(WGCNA) # Includes variety of functions associated with WGCNA
-library(car) # Fro regression analysis
+library(car) # For regression analysis
 
 # Setting the working directory to the file path - i.e. where TCGA data is
 
@@ -375,12 +375,14 @@ plotDendroAndColors(geneTree_man, moduleColorsManual2, "Dynamic Tree Cut",
 
 # Merge highly correlated modules - not necessary but good next step
 merge_man=mergeCloseModules(datExpr,moduleColorsManual2,
-                        cutHeight=MEDissThres1)
+                            cutHeight=MEDissThres1)
 # Resulting merged module colors
-moduleColorsManual3 = merge$colors
+moduleColorsManual3 = merge_man$colors
 # Eigengenes of the newly merged modules:
 MEsManual = merge_man$newMEs
 
+MEsManualList=moduleEigengenes(datExpr, align == "along average", colors=moduleColorsManual3)
+signif(cor(MEsManualList$eigengenes, use="p"),2)
 # Show the effect of module merging by plotting the
 # original and merged module colors below the tree
 datColors=data.frame(moduleColorsManual3,moduleColorsManual2)
@@ -413,16 +415,316 @@ colorOrder_man = c('grey', standardColors(50));
 moduleLabels_man = match(mergedColors_man, colorOrder_man)-1;
 MEs_man_merge = mergedMEs_man;
 # Save module colors and labels
-save(MEs_man_merge, moduleLabels_man, mergedColors_man, geneTree_man, file = "SKCM-networkConstruction-MHmerged.RData")
+save(A_man, dissTOM_man, moduleLabelsManual1, MEList_man, MEs_man, MET_man, 
+     moduleColorsManual2, moduleColorsManual3, merge_man, MEsManual, MEs_man_merge, 
+     moduleLabels_man, mergedColors_man, geneTree_man, 
+     file = "SKCM-networkConstruction-MHmerged.RData")
+
+
+
+########## NEW STUFF #################
+### From Tutorial 3.6
+
+#####################################################################################
+### WGCNA ANALYSIS - Comparison of Eigengenes across patient samples within modules
+#####################################################################################
+
+# Get a variable with just the module eigengene expression for all patients across all modules
+# (without NaNs), and find the correlation (matrix) between modules
+datME = MEsManualList$eigengenes
+datME_filtered = datME[complete.cases(datME),]
+signif(cor(datME, use="p"),2)
+
+# Making heatmaps of genes (row) and patient samples (columns)
+# Green = underexpression; red = overexpression
+sizeGrWindow(8,9)
+par(mfrow=c(3,1), mar=c(1, 2, 4, 1))
+which.module="maroon";
+plotMat(t(scale(datExpr[,moduleColorsManual3==which.module ]) ),nrgcols=30,rlabels=T,
+        clabels=T,rcols=which.module,
+        title=which.module )
+
+sizeGrWindow(8,7);
+which.module="lightcyan1"
+ME=datME_filtered[, paste("ME",which.module, sep="")]
+par(mfrow=c(2,1), mar=c(0.3, 5.5, 3, 2))
+plotMat(t(scale(datExpr[,moduleColorsManual3==which.module ]) ),
+        nrgcols=30,rlabels=F,rcols=which.module,
+        main=which.module, cex.main=2)
+
+# Looking into the variance within each module (explained by eigengene)
+# Idea - larger the variance - more interesting?
+MEsManual_Variance = propVarExplained(datExpr, colors = moduleColorsManual3, MEs = MEsManual, corFnc = "cor", corOptions = "use = 'p'")
+
+write.table(MEsManual, file = "ModuleEigengenes.txt", sep = '\t')
+write.table(MEsManual_Variance, file = "ModuleVariance.txt", sep="\t", col.names = NA)
+
+# Idea - mean eigengene value + variance could mean something? box plots?
+MEs_mean = colMeans(MEsManual, na.rm = T)
+
+# Took spreadsheet into Excel and sorted MEs by variance (descending) - could have done here
+MEs_Manual_Variance_sorted = read.table(file = "ModuleVariance_sorted.txt", sep = '\t', header = T)
+
+# Pulling out "PVE" in "PVE(module_color)" string for plotting variance bar chart
+colors = substring(MEs_Manual_Variance_sorted$MEs, 4)
+# Making barchart of sorting descending variance amoung MEs
+pdf("MEvariance.pdf", width = 12, height = 5)
+par(mar=c(10,5,2,1))
+barplot(MEs_Manual_Variance_sorted$Variance, main = "ME Variance", xlab = "", ylab = "PropVarExplained", 
+        ylim = c(0,0.6), col = colors, names.arg = colors, las = 2)
+mtext("Modules", side = 1, line = 7, las = 1, cex = 1)
+dev.off()
+
+# IMPORTANT PLOTS FOR F31 - Eigengene variability within each module for all patient samples
+# Making a single PDF for all modules - eigengene expression (y) vs. patient samples (x)
+pdf("MEplots_EEvPS.pdf", width = 12, height = 5)
+plot_list = list()
+for(i in colors){
+  ME=datME_filtered[, paste("ME",i, sep="")]
+  par(mar=c(5, 5, 2.5, 0.2))
+  p = barplot(ME, col=i, main= paste("ME", i, sep = ""), cex.main=2,
+              ylab="Eigengene Expression",xlab="Patient Sample")
+  plot_list[[i]] = p
+  print(plot_list[[i]])
+}
+dev.off()
 
 
 #####################################################################################
-### WGCNA ANALYSIS - Network Visualization
+### WGCNA ANALYSIS - Intramodular Connectivity (IC) and Module Membership (MM) Compared
 #####################################################################################
 
+Alldegrees1 = intramodularConnectivity(A_man, moduleColorsManual3)
+head(Alldegrees1)
+
+# Relationship between gene significance and intramodular connectivity - if have patient clinical data
+#colorlevels = unique(moduleColorsManual3)
+#sizeGrWindow(9,6)
+#par(mfrow = c(2, as.integer(0.5+length(colorlevels)/2)))
+#par(mar = c(4,5,3,1))
+#for (i in c(1:length(colorlevels))){
+#  whichmodule = colorlevels[[i]];
+#  restrict1 = (moduleColorsManual3 == whichmodule)
+#  verboseScatterplot(Alldegrees1$kWithin[restrict1],
+#                     GeneSignificance[restrict1], col=colorh1[restrict1],
+#                     main=whichmodule,
+#                     xlab = "Connectivity", ylab = "Gene Significance", abline = TRUE)
+#}
+
+# Finding intramodular connectivity among all genes measured
+datKME = signedKME(datExpr, datME, outputColumnName = "MM.")
+## Got "Some genes are constant" error message - introduced NaNs into data matrix
+head(datKME)
+View(datKME)
+
+# Finding genes with high intramodular connectivity in interesting modules (most variance)
+# Insert any module here - MM.module_color - or loop over all?
+FilterGenes = abs(datKME$MM.maroon)>0.8 #& abs(GS1)>0.2 # for patient data
+table(FilterGenes)
+FilterGenes = FilterGenes[complete.cases(FilterGenes)] # Removing NaNs
+dimnames(data.frame(datExpr))[[2]][FilterGenes] # Getting gene names that pass above threshold
+
+# Finding the relationship between module membership (MM) and intramodular connectivity in interesting
+# modules
+pdf("MMvIC_top4modules.pdf")
+#sizeGrWindow(8,6)
+par(mfrow=c(2,2))
+# Choose certain number of modules and set up so fits in matrix mfrow (2x2=4)
+# Need to change this into a loop
+which.color1="maroon";
+restrictGenes=moduleColorsManual3==which.color1
+verboseScatterplot(Alldegrees1$kWithin[ restrictGenes],
+                   (datKME[restrictGenes, paste("MM.", which.color1, sep="")])^6,
+                   col=which.color1,
+                   xlab="Intramodular Connectivity",
+                   ylab="(Module Membership)^6")
+which.color1="darkorange2";
+restrictGenes=moduleColorsManual3==which.color1
+verboseScatterplot(Alldegrees1$kWithin[ restrictGenes],
+                   (datKME[restrictGenes, paste("MM.", which.color1, sep="")])^6,
+                   col=which.color1,
+                   xlab="Intramodular Connectivity",
+                   ylab="(Module Membership)^6")
+which.color1="thistle2";
+restrictGenes=moduleColorsManual3==which.color1
+verboseScatterplot(Alldegrees1$kWithin[ restrictGenes],
+                   (datKME[restrictGenes, paste("MM.", which.color1, sep="")])^6,
+                   col=which.color1,
+                   xlab="Intramodular Connectivity",
+                   ylab="(Module Membership)^6")
+which.color1="skyblue3";
+restrictGenes=moduleColorsManual3==which.color1
+verboseScatterplot(Alldegrees1$kWithin[ restrictGenes],
+                   (datKME[restrictGenes, paste("MM.", which.color1, sep="")])^6,
+                   col=which.color1,
+                   xlab="Intramodular Connectivity",
+                   ylab="(Module Membership)^6")
+dev.off()
+
+save(MEsManual, MEsManualList, datME, datME_filtered, ME, MEsManual_Variance, MEs_Manual_Variance_sorted,
+    MEs_mean, colors, Alldegrees1, datKME, FilterGenes, file = "July262016.RData")
+
+
+#####################################################################################
+### WGCNA ANALYSIS - Output Gene Lists Per Module and Enrichment
+#####################################################################################
+
+### GET GENE LISTS ###
+
+# Read in the probe annotation
+#annot = read.csv(file = "GeneAnnotation.csv"); # REPLACE WITH TCGA GENE ANNOTATION FILE
+# Match probes in the data set to the probe IDs in the annotation file 
+annot = read.table(file = "TCGA.hg19.June2011.gaf", sep = '\t')
+probes = names(datExpr)
+probes_to_annot = match(probes, annot$V2)
+allLLIDs = annot$V2[probes_to_annot]
+#probes2annot = match(probes, annot$substanceBXH) # Probably not right - need to see what IDs to look for
+# Get the corresponding Locuis Link IDs
+#allLLIDs = annot$LocusLinkID[probes2annot]; # Probably not right - need to see what IDs to look for
+# Choose interesting/all modules and get gene list - make sure to specify from what method and if merged/not
+# OUTPUT should be list of modules (columns) and associated genes (rows)
+#intModules = c("maroon", "darkorange2", "thistle2") 
+
+modList = list()
+for (module in moduleColorsManual3)
+{
+  # Select module probes
+  modGenes = (moduleColorsManual3==module)
+  # Get their entrez ID codes
+  #modLLIDs = allLLIDs[modGenes];
+  modCodes = probes[modGenes]
+  # Write them into a list
+  modList[[module]] = modCodes
+#  fileName = paste("/Users/Corey/Documents/QuarantaLab/WGCNA/GE_SKCM/RNASeqV2/UNC__IlluminaHiSeq_RNASeqV2/moduleFiles/modCodes_", module, ".txt", sep="");
+#  write.table(as.data.frame(modCodes), file = fileName,
+#              row.names = FALSE, col.names = FALSE)
+#}
+}
+getGeneName = function (geneChar, split="|", pos=1)
+  unlist(sapply(strsplit(geneChar, split = split, fixed = TRUE), function(x) (x[pos]), simplify = FALSE)) 
+
+
+indx = sapply(modList, length)
+res = as.data.frame(do.call(cbind, lapply(modList, 'length<-', max(indx))))
+#colnames(res) = names(modList[[which.max(indx)]])
+#library(stringr)
+#str_split_fixed()
+for (i in 1:nrow(res_test2)){
+  for (i in 1:length(res_test2)) {
+    res_codes = sapply(strsplit(res_test2, '|', fixed = TRUE), function(x) (x[2]))
+  }
+  }
+
+write.table(res, file = "modCodes_all.txt", row.names = FALSE, col.names = TRUE, sep = "\t")
+
+# As background in the enrichment analysis, we will use all probes in the analysis.
+# fileName = paste("LocusLinkIDs-all.txt", sep="");
+# write.table(as.data.frame(allLLIDs), file = fileName,
+#             row.names = FALSE, col.names = FALSE)
+
+# Splitting the strings up so that can use - need to remove NAs
+
+for (i in length(res_test)) {
+  a = sapply(strsplit(as.character(res_test), '|', fixed = TRUE), function(x) (x[2]))}
+
+for (i in 1:nrow(res_test2)) {
+  a = sapply(strsplit(as.character(res_test2), '|', fixed = TRUE), function(x) (x[2]))}
+
+res_test2_mat = as.matrix(res_test2)
+res_test2_mat_sub = res_test2_mat[1:5,]
+
+for (i in 1:dim(res_test2_mat_sub)[1])
+{
+  for (j in 1:dim(res_test2_mat_sub)[2])
+  {
+    a_sub = sapply(strsplit(res_test2_mat_sub, split = '|', fixed = TRUE), function(x) (x[2]))
+    a_sub_nl = cat(paste0("\t", as.matrix(a_sub[1:]), "\n"))
+    
+  }
+}
+
+within(res_test2, foo <- data.frame(do.call('rbind', strsplit(as.character(res_test2), "|", fixed = TRUE))))
+  #a = unlist(strsplit(res_test, "|", fixed = TRUE))[2]}
+head(a)
+
+
+### MODULE ENRICHMENT ###
+
+# Enrichment analysis - runs for a while - outputs top 10 enriched GO terms with each module (colors)
+GOenr = GOenrichmentAnalysis(moduleColors, allLLIDs, organism = "human", nBestP = 10);
+# Assign enrichment terms for each module to variable
+tab = GOenr$bestPTerms[[4]]$enrichment
+# Get _______
+names(tab)
+# Write table to csv file - search for genes of interest in modules
+write.table(tab, file = "GOEnrichmentTable.csv", sep = ",", quote = TRUE, row.names = FALSE)
+
+# Figure out what columns (components) within table are most important to you
+keepCols = c(1, 2, 5, 6, 7, 12, 13);
+screenTab = tab[, keepCols];
+# Round the numeric columns to 2 decimal places:
+numCols = c(3, 4);
+screenTab[, numCols] = signif(apply(screenTab[, numCols], 2, as.numeric), 2)
+# Truncate the the term name to at most 40 characters
+screenTab[, 7] = substring(screenTab[, 7], 1, 40)
+# Shorten the column names:
+colnames(screenTab) = c("module", "size", "p-val", "Bonf", "nInTerm", "ont", "term name");
+rownames(screenTab) = NULL;
+# Set the width of R's output. The reader should play with this number to obtain satisfactory output.
+options(width=95)
+# Finally, display the enrichment table:
+screenTab
+
+#####################################################################################
+### WGCNA ANALYSIS - Network Visualization (MDS, PCA)
+#####################################################################################
+
+library(cluster)
+options(stringsAsFactors = FALSE);
+
+### Multidimensional Scaling (MDS) plot - version of PCA - DON'T DO IN RSTUDIO, WILL CRASH - takes 3+ hours
+#pdf("MDS_SKCM.pdf")
+cmd1 = cmdscale(as.dist(dissTOM_man),2)
+sizeGrWindow(7,6)
+par(mfrow = c(1,1))
+plot(cmd1, col = as.character(moduleColorsManual3), main = "MDS Plot", 
+     xlab = "Scaling Dimension 1", ylab = "Scaling Dimension 2")
+#dev.off()
+
+### Principal Component Analysis (PCA) - outside of WGCNA - rough
+View(MET2)
+MET3 = MET2[complete.cases(MET2),]
+dim(MET2)
+dim(MET3)
+
+fit = princomp(MET3, cor = TRUE, scores = TRUE) # cor = TRUE)
+summary(fit)
+loadings(fit)
+fit$scores
+plot(fit, type="lines")
+
+par(mar = c(1.5, 1.5, 1.5, 1.5))
+biplot(fit)
+
+library(devtools)
+install_github("fawda123/ggord")
+library(ggord)
+ord = prcomp(fit[,1:25])
+
+install.packages("rgl")
+library(rgl)
+plot3d(fit$scores[,1:3])
+text3d(fit$scores[, 1:3], texts = rownames(MET3))
+text3d(fit$loadings[,1:3], texts = rownames(fit$loadings), col = "red")
+cords = NULL
+for (i in 1:nrow(fit$loadings)) {
+  cords = rbind(cords, rbind(c(0,0,0), fit$loadings[i, 1:3]))
+}
+lines3d(cords, col = "red", lwd = 4)
+
+### TOM Plots - Takes lots of time and not very informative for large datasets
 nGenes = ncol(datExpr)
 nSamples = nrow(datExpr)
-
 #Calculate the Topological Overlap again
 dissTOM = 1-TOMsimilarityFromExpr(datExpr, power = 12);
 # Transform dissTOM to make connections visible
@@ -433,39 +735,89 @@ diag(plotTOM) = NA;
 sizeGrWindow(9,9)
 TOMplot(plotTOM, geneTree, moduleColors1, main = "Network heatmap plot, all genes")
 
-### Visualize the eigengene network ###
 
-MEs2 = moduleEigengenes(datExpr, moduleColors1)$eigengenes
-# Calculate eigengenes
-MEList2=moduleEigengenes(datExpr,colors=moduleColors1)
-MEs2 = MEList$eigengenes
-MET2=orderMEs(MEs)
-# Plot the dendrogram
-sizeGrWindow(6,6);
-par(cex = 1.0)
-plotEigengeneNetworks(MET2, "Eigengene dendrogram", marDendro = c(0,4,2,0),
-                      plotHeatmaps = FALSE)
+#####################################################################################
+### WGCNA ANALYSIS - Other Tutorial Stuff
+#####################################################################################
 
-# Plot the heatmap matrix (note: this plot will overwrite the dendrogram plot)
-par(cex = 1.2)
-plotEigengeneNetworks(MET2, "Eigengene adjacency heatmap", marHeatmap = c(3,4,2,2),
-                      plotDendrograms = FALSE, xLabelsAngle = 90)
+meanExpressionByArray = apply(datExpr,1, mean, ra.rm = T)
+head(meanExpressionByArray)
+NumberMissingByArray = apply(is.na(data.frame(datExpr)), 1, sum)
+head(NumberMissingByArray)
 
-### Principal Component Analysis (PCA) of eigengenes
-View(MET2)
-MET3 = MET2[complete.cases(MET2),]
-dim(MET2)
-dim(MET3)
-fit = princomp(MET3, cor = TRUE)
-summary(fit)
-loadings(fit)
-fit$scores
-plot(fit, type="lines")
-par(mar = c(1.5, 1.5, 1.5, 1.5))
-biplot(fit)
+# Looking at overall gene expression per sample - consistency
+sizeGrWindow(9,5)
+barplot(meanExpressionByArray, xlab = "Sample", ylab = "Mean Expression",
+        main = "Mean Expression across Samples", names.arg = c(1:474), cex.names = 0.7)
 
-### Ideas ###
+keepArray = NumberMissingByArray<500
+table(keepArray)
+datExpr = datExpr[keepArray,]
+#y = y[keepArray]
+#ArrayName[keepArray]
+
+# Other potential subsetting techniques
+NumberMissingByGene = apply(is.na(data.frame(datExpr)),2,sum)
+summary(NumberMissingByGene)
+variancedatExpr = as.vector(apply(as.matrix(datExpr), 2, var, na.rm = T))
+no.presentdatExpr = as.vector(apply(!is.na(as.matrix(datExpr)), 2, sum))
+table(no.presentdatExpr)
+keepGenes = variancedatExpr>0 & no.presentdatExpr>=4
+table(keepGenes)
+datExpr = datExpr[, keepGenes]
+#GeneName = GeneName[keepGenes]
+
+#sizeGrWindow(9,5)
+#plotClusterTreeSamples(datExpr = datExpr, y = keepArray)
+
+#datME = moduleEigengenes(datExpr, colorh1)$eigengenes
+#signif(cor(datME, use = "p"), 2)
+#signif(cor(MEs_man_merge, use = "p"), 2)
+
+## Already generated a similar plot earlier (above) - just ME labels instead of module labels
+#dissimME = (1-t(cor(datME, use = "pairwise.complete.obs", method = "p")))/2
+#flashClustMEs_man = flashClust(as.dist(dissimME), method = "complete")
+#par(mfrow = c(1,1))
+#plot(flashClustMEs_man, main = "Clustering Tree Based on Module Eigengenes")
+
+#sizeGrWindow(8,9)
+#par(mfrow=c(3,1), mar=c(1, 2, 4, 1))
+#which.module="turquoise"; 
+#plotMat(t(scale(datExpr[,colorh1==which.module ]) ),nrgcols=30,rlabels=T,
+#        clabels=T,rcols=which.module,
+#        title=which.module )
+# for the second (blue) module we use
+#which.module="blue";  
+#plotMat(t(scale(datExpr[,colorh1==which.module ]) ),nrgcols=30,rlabels=T,
+#        clabels=T,rcols=which.module,
+#        title=which.module )
+#which.module="brown"; 
+#plotMat(t(scale(datExpr[,colorh1==which.module ]) ),nrgcols=30,rlabels=T,
+#        clabels=T,rcols=which.module,
+#        title=which.module )
+
+#####################################################################################
+### Ideas
+#####################################################################################
 
 # Cluster or PCA eigengenes into groups and look deeper into those groups
 # Consensus clustering of patients in each (important) module
 # Seeing if clusters correspond to oncogenic mutations
+
+### Visualize the eigengene network ###
+
+#MEs2 = moduleEigengenes(datExpr, moduleColors1)$eigengenes
+## Calculate eigengenes
+#MEList2=moduleEigengenes(datExpr,colors=moduleColors1)
+#MEs2 = MEList$eigengenes
+#MET2=orderMEs(MEs2)
+## Plot the dendrogram
+#sizeGrWindow(6,6);
+#par(cex = 1.0)
+#plotEigengeneNetworks(MET2, "Eigengene dendrogram", marDendro = c(0,4,2,0),
+#                      plotHeatmaps = FALSE)
+#
+## Plot the heatmap matrix (note: this plot will overwrite the dendrogram plot)
+#par(cex = 1.2)
+#plotEigengeneNetworks(MET2, "Eigengene adjacency heatmap", marHeatmap = c(3,4,2,2),
+#                      plotDendrograms = FALSE, xLabelsAngle = 90)
